@@ -46,6 +46,8 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
 
 import static io.pravega.connectors.flink.util.FlinkPravegaUtils.createPravegaReader;
@@ -116,6 +118,8 @@ public class FlinkPravegaReader<T>
     // flag to enable/disable metrics
     final boolean enableMetrics;
 
+    final ScheduledExecutorService checkpointScheduler;
+
     // ----- runtime fields -----
 
     // Flag to terminate the source. volatile, because 'stop()' and 'cancel()'
@@ -158,7 +162,8 @@ public class FlinkPravegaReader<T>
                                  DeserializationSchema<T> deserializationSchema,
                                  SerializedValue<AssignerWithTimeWindows<T>> assignerWithTimeWindows,
                                  Time eventReadTimeout, Time checkpointInitiateTimeout,
-                                 boolean enableMetrics) {
+                                 boolean enableMetrics,
+                                 int checkpointSchedulerPoolSize) {
 
         this.hookUid = Preconditions.checkNotNull(hookUid, "hookUid");
         this.clientConfig = Preconditions.checkNotNull(clientConfig, "clientConfig");
@@ -170,6 +175,7 @@ public class FlinkPravegaReader<T>
         this.checkpointInitiateTimeout = Preconditions.checkNotNull(checkpointInitiateTimeout, "checkpointInitiateTimeout");
         this.enableMetrics = enableMetrics;
         this.assignerWithTimeWindows = assignerWithTimeWindows;
+        this.checkpointScheduler = Executors.newScheduledThreadPool(checkpointSchedulerPoolSize);
     }
 
     /**
@@ -330,6 +336,8 @@ public class FlinkPravegaReader<T>
         if (readerGroup != null) {
             readerGroup.close();
         }
+
+        this.checkpointScheduler.shutdownNow();
     }
 
     // ------------------------------------------------------------------------
@@ -338,7 +346,7 @@ public class FlinkPravegaReader<T>
 
     @Override
     public MasterTriggerRestoreHook<Checkpoint> createMasterTriggerRestoreHook() {
-        return new ReaderCheckpointHook(this.hookUid, createReaderGroup(), this.checkpointInitiateTimeout, this.readerGroupConfig);
+        return new ReaderCheckpointHook(this.hookUid, createReaderGroup(), this.checkpointInitiateTimeout, this.readerGroupConfig, this.checkpointScheduler);
     }
 
     @Override

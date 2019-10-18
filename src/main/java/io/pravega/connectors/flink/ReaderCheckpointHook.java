@@ -21,7 +21,6 @@ import org.apache.flink.runtime.checkpoint.MasterTriggerRestoreHook;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -57,14 +56,17 @@ class ReaderCheckpointHook implements MasterTriggerRestoreHook<Checkpoint> {
     // The Pravega reader group config.
     private final ReaderGroupConfig readerGroupConfig;
 
+    private final ScheduledExecutorService checkpointScheduler;
 
-    ReaderCheckpointHook(String hookUid, ReaderGroup readerGroup, Time triggerTimeout, ReaderGroupConfig readerGroupConfig) {
+
+    ReaderCheckpointHook(String hookUid, ReaderGroup readerGroup, Time triggerTimeout, ReaderGroupConfig readerGroupConfig, ScheduledExecutorService checkpointScheduler) {
 
         this.hookUid = checkNotNull(hookUid);
         this.readerGroup = checkNotNull(readerGroup);
         this.triggerTimeout = triggerTimeout;
         this.readerGroupConfig = readerGroupConfig;
         this.checkpointSerializer = new CheckpointSerializer();
+        this.checkpointScheduler = checkpointScheduler;
     }
 
     // ------------------------------------------------------------------------
@@ -80,22 +82,10 @@ class ReaderCheckpointHook implements MasterTriggerRestoreHook<Checkpoint> {
 
         final String checkpointName = createCheckpointName(checkpointId);
 
-        // The method only offers an 'Executor', but we need a 'ScheduledExecutorService'
-        // Because the hook currently offers no "shutdown()" method, there is no good place to
-        // shut down a long lived ScheduledExecutorService, so we create one per request
-        // (we should change that by adding a shutdown() method to these hooks)
-        // ths shutdown 
-
-        final ScheduledExecutorService scheduledExecutorService = createScheduledExecutorService();
-
         final CompletableFuture<Checkpoint> checkpointResult =
-                this.readerGroup.initiateCheckpoint(checkpointName, scheduledExecutorService);
+                this.readerGroup.initiateCheckpoint(checkpointName, checkpointScheduler);
 
-        // Add a timeout to the future, to prevent long blocking calls
-        scheduledExecutorService.schedule(() -> checkpointResult.cancel(false), triggerTimeout.toMilliseconds(), TimeUnit.MILLISECONDS);
-
-        // we make sure the executor is shut down after the future completes
-        checkpointResult.handle((success, failure) -> scheduledExecutorService.shutdownNow());
+        checkpointScheduler.schedule(() -> checkpointResult.cancel(false), triggerTimeout.toMilliseconds(), TimeUnit.MILLISECONDS);
 
         return checkpointResult;
     }
@@ -133,10 +123,6 @@ class ReaderCheckpointHook implements MasterTriggerRestoreHook<Checkpoint> {
     // ------------------------------------------------------------------------
     //  utils
     // ------------------------------------------------------------------------
-
-    protected ScheduledExecutorService createScheduledExecutorService() {
-        return Executors.newSingleThreadScheduledExecutor();
-    }
 
     static long parseCheckpointId(String checkpointName) {
         checkArgument(checkpointName.startsWith(PRAVEGA_CHECKPOINT_NAME_PREFIX));

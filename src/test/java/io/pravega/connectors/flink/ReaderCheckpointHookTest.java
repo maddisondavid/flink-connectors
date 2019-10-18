@@ -39,7 +39,10 @@ public class ReaderCheckpointHookTest {
     public void testConstructor() throws Exception {
         ReaderGroup readerGroup = mock(ReaderGroup.class);
         ReaderGroupConfig readerGroupConfig = mock(ReaderGroupConfig.class);
-        TestableReaderCheckpointHook hook = new TestableReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig);
+
+        MockScheduler mockScheduler = new MockScheduler();
+        ReaderCheckpointHook hook = new ReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig, mockScheduler.scheduledExecutorService);
+
         assertEquals(HOOK_UID, hook.getIdentifier());
         assertTrue(hook.createCheckpointDataSerializer() instanceof CheckpointSerializer);
     }
@@ -50,7 +53,9 @@ public class ReaderCheckpointHookTest {
         ReaderGroupConfig readerGroupConfig = mock(ReaderGroupConfig.class);
         CompletableFuture<Checkpoint> checkpointPromise = new CompletableFuture<>();
         when(readerGroup.initiateCheckpoint(anyString(), any())).thenReturn(checkpointPromise);
-        TestableReaderCheckpointHook hook = new TestableReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig);
+
+        MockScheduler mockScheduler = new MockScheduler();
+        ReaderCheckpointHook hook = new ReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig, mockScheduler.scheduledExecutorService);
 
         CompletableFuture<Checkpoint> checkpointFuture = hook.triggerCheckpoint(1L, 1L, Executors.directExecutor());
         assertNotNull(checkpointFuture);
@@ -61,7 +66,6 @@ public class ReaderCheckpointHookTest {
         checkpointPromise.complete(expectedCheckpoint);
         assertTrue(checkpointFuture.isDone());
         assertSame(expectedCheckpoint, checkpointFuture.get());
-        verify(hook.scheduledExecutorService).shutdownNow();
     }
 
     @Test
@@ -70,23 +74,26 @@ public class ReaderCheckpointHookTest {
         ReaderGroupConfig readerGroupConfig = mock(ReaderGroupConfig.class);
         CompletableFuture<Checkpoint> checkpointPromise = new CompletableFuture<>();
         when(readerGroup.initiateCheckpoint(anyString(), any())).thenReturn(checkpointPromise);
-        TestableReaderCheckpointHook hook = new TestableReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig);
+
+        MockScheduler mockScheduler = new MockScheduler();
+        ReaderCheckpointHook hook = new ReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig, mockScheduler.scheduledExecutorService);
 
         CompletableFuture<Checkpoint> checkpointFuture = hook.triggerCheckpoint(1L, 1L, Executors.directExecutor());
         assertNotNull(checkpointFuture);
         verify(readerGroup).initiateCheckpoint(anyString(), any());
 
         // invoke the timeout callback
-        hook.invokeScheduledCallables();
+        mockScheduler.invokeScheduledCallables();
         assertTrue(checkpointFuture.isCancelled());
-        verify(hook.scheduledExecutorService).shutdownNow();
     }
 
     @Test
     public void testReset() {
         ReaderGroup readerGroup = mock(ReaderGroup.class);
         ReaderGroupConfig readerGroupConfig = mock(ReaderGroupConfig.class);
-        TestableReaderCheckpointHook hook = new TestableReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig);
+        MockScheduler mockScheduler = new MockScheduler();
+        ReaderCheckpointHook hook = new ReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig, mockScheduler.scheduledExecutorService);
+
         hook.reset();
         verify(readerGroup).resetReaderGroup(readerGroupConfig);
     }
@@ -95,7 +102,9 @@ public class ReaderCheckpointHookTest {
     public void testClose() {
         ReaderGroup readerGroup = mock(ReaderGroup.class);
         ReaderGroupConfig readerGroupConfig = mock(ReaderGroupConfig.class);
-        TestableReaderCheckpointHook hook = new TestableReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig);
+        MockScheduler mockScheduler = new MockScheduler();
+        ReaderCheckpointHook hook = new ReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig, mockScheduler.scheduledExecutorService);
+
         hook.close();
         verify(readerGroup).close();
     }
@@ -105,31 +114,25 @@ public class ReaderCheckpointHookTest {
     public void testRestore() throws Exception {
         ReaderGroup readerGroup = mock(ReaderGroup.class);
         ReaderGroupConfig readerGroupConfig = mock(ReaderGroupConfig.class);
-        TestableReaderCheckpointHook hook = new TestableReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig);
+        MockScheduler mockScheduler = new MockScheduler();
+        ReaderCheckpointHook hook = new ReaderCheckpointHook(HOOK_UID, readerGroup, Time.minutes(1), readerGroupConfig, mockScheduler.scheduledExecutorService);
+
 
         Checkpoint checkpoint = mock(Checkpoint.class);
         hook.restoreCheckpoint(1L, checkpoint);
         verify(readerGroup).resetReadersToCheckpoint(checkpoint);
     }
 
-    static class TestableReaderCheckpointHook extends ReaderCheckpointHook {
-
-        final ScheduledExecutorService scheduledExecutorService;
+    static class MockScheduler {
+        public final ScheduledExecutorService scheduledExecutorService;
         private Callable<Void> scheduledCallable;
 
-        @SuppressWarnings("unchecked")
-        TestableReaderCheckpointHook(String hookUid, ReaderGroup readerGroup, Time triggerTimeout, ReaderGroupConfig readerGroupConfig) {
-            super(hookUid, readerGroup, triggerTimeout, readerGroupConfig);
+        public MockScheduler() {
             scheduledExecutorService = mock(ScheduledExecutorService.class);
             when(scheduledExecutorService.schedule(any(Callable.class), anyLong(), any())).thenAnswer(a -> {
                 scheduledCallable = a.getArgumentAt(0, Callable.class);
                 return null;
             });
-        }
-
-        @Override
-        protected ScheduledExecutorService createScheduledExecutorService() {
-            return scheduledExecutorService;
         }
 
         public void invokeScheduledCallables() throws Exception {

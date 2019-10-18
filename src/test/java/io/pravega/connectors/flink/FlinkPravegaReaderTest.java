@@ -92,6 +92,7 @@ public class FlinkPravegaReaderTest {
     private static final Time READER_TIMEOUT = Time.seconds(1);
     private static final Time CHKPT_TIMEOUT = Time.seconds(1);
     private static final int MAX_OUTSTANDING_CHECKPOINT_REQUEST = 5;
+    private static final int CHECKPOINT_SCHEDULER_POOL_SIZE = 3;
 
     // region Source Function Tests
 
@@ -260,7 +261,7 @@ public class FlinkPravegaReaderTest {
         boolean enableMetrics = true;
         return new TestableFlinkPravegaReader<>(
                 "hookUid", clientConfig, rgConfig, SAMPLE_SCOPE, GROUP_NAME, DESERIALIZATION_SCHEMA,
-                null, READER_TIMEOUT, CHKPT_TIMEOUT, enableMetrics);
+                null, READER_TIMEOUT, CHKPT_TIMEOUT, enableMetrics, CHECKPOINT_SCHEDULER_POOL_SIZE);
     }
 
     /**
@@ -277,7 +278,7 @@ public class FlinkPravegaReaderTest {
                     new SerializedValue<>(assignerWithTimeWindows);
             return new TestableFlinkPravegaReader<>(
                     "hookUid", clientConfig, rgConfig, SAMPLE_SCOPE, GROUP_NAME, DESERIALIZATION_SCHEMA,
-                    serializedAssigner, READER_TIMEOUT, CHKPT_TIMEOUT, enableMetrics);
+                    serializedAssigner, READER_TIMEOUT, CHKPT_TIMEOUT, enableMetrics, CHECKPOINT_SCHEDULER_POOL_SIZE);
         } catch (IOException e) {
             throw new IllegalArgumentException("The given assigner is not serializable", e);
         }
@@ -452,9 +453,10 @@ public class FlinkPravegaReaderTest {
                                              String readerGroupName, DeserializationSchema<T> deserializationSchema,
                                              SerializedValue<AssignerWithTimeWindows<T>> assignerWithTimeWindows,
                                              Time eventReadTimeout, Time checkpointInitiateTimeout,
-                                             boolean enableMetrics) {
+                                             boolean enableMetrics,
+                                             int checkpointPoolSize) {
             super(hookUid, clientConfig, readerGroupConfig, readerGroupScope, readerGroupName, deserializationSchema,
-                    assignerWithTimeWindows, eventReadTimeout, checkpointInitiateTimeout, enableMetrics);
+                    assignerWithTimeWindows, eventReadTimeout, checkpointInitiateTimeout, enableMetrics, checkpointPoolSize);
         }
 
         @Override
