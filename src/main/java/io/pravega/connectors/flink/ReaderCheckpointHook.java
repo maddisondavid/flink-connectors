@@ -19,11 +19,13 @@ import org.apache.flink.api.common.time.Time;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.runtime.checkpoint.MasterTriggerRestoreHook;
 
+import javax.annotation.concurrent.GuardedBy;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -57,6 +59,10 @@ class ReaderCheckpointHook implements MasterTriggerRestoreHook<Checkpoint> {
     // The Pravega reader group config.
     private final ReaderGroupConfig readerGroupConfig;
 
+    private final Object scheduledExecutorLock = "lock";
+
+    @GuardedBy("scheduledExecutorLock")
+    protected ScheduledExecutorService scheduledExecutorService;
 
     ReaderCheckpointHook(String hookUid, ReaderGroup readerGroup, Time triggerTimeout, ReaderGroupConfig readerGroupConfig) {
 
@@ -77,27 +83,29 @@ class ReaderCheckpointHook implements MasterTriggerRestoreHook<Checkpoint> {
     @Override
     public CompletableFuture<Checkpoint> triggerCheckpoint(
             long checkpointId, long checkpointTimestamp, Executor executor) throws Exception {
+        ensureScheduledExecutorExists();
 
         final String checkpointName = createCheckpointName(checkpointId);
-
-        // The method only offers an 'Executor', but we need a 'ScheduledExecutorService'
-        // Because the hook currently offers no "shutdown()" method, there is no good place to
-        // shut down a long lived ScheduledExecutorService, so we create one per request
-        // (we should change that by adding a shutdown() method to these hooks)
-        // ths shutdown 
-
-        final ScheduledExecutorService scheduledExecutorService = createScheduledExecutorService();
-
-        final CompletableFuture<Checkpoint> checkpointResult =
-                this.readerGroup.initiateCheckpoint(checkpointName, scheduledExecutorService);
+        final CompletableFuture<Checkpoint> checkpointResult = this.readerGroup.initiateCheckpoint(checkpointName, scheduledExecutorService);
 
         // Add a timeout to the future, to prevent long blocking calls
         scheduledExecutorService.schedule(() -> checkpointResult.cancel(false), triggerTimeout.toMilliseconds(), TimeUnit.MILLISECONDS);
 
-        // we make sure the executor is shut down after the future completes
-        checkpointResult.handle((success, failure) -> scheduledExecutorService.shutdownNow());
-
         return checkpointResult;
+    }
+
+    @Override
+    public void close() {
+        // close the reader group properly
+        log.info("closing the reader group");
+        this.readerGroup.close();
+
+        synchronized (scheduledExecutorLock) {
+            if (scheduledExecutorService != null ) {
+                log.info("Shutting Down ScheduledExecutor");
+                scheduledExecutorService.shutdownNow();
+            }
+        }
     }
 
     @SuppressWarnings("deprecation")
@@ -118,12 +126,7 @@ class ReaderCheckpointHook implements MasterTriggerRestoreHook<Checkpoint> {
         this.readerGroup.resetReaderGroup(this.readerGroupConfig);
     }
 
-    @Override
-    public void close() {
-        // close the reader group properly
-        log.info("closing the reader group");
-        this.readerGroup.close();
-    }
+
 
     @Override
     public SimpleVersionedSerializer<Checkpoint> createCheckpointDataSerializer() {
@@ -133,6 +136,14 @@ class ReaderCheckpointHook implements MasterTriggerRestoreHook<Checkpoint> {
     // ------------------------------------------------------------------------
     //  utils
     // ------------------------------------------------------------------------
+
+    private void ensureScheduledExecutorExists() {
+        synchronized (scheduledExecutorLock) {
+            if (scheduledExecutorService == null) {
+                createScheduledExecutorService();
+            }
+        }
+    }
 
     protected ScheduledExecutorService createScheduledExecutorService() {
         return Executors.newSingleThreadScheduledExecutor();
